@@ -1,0 +1,44 @@
+name: Embr Branch Environment
+
+on:
+  push:
+    branches-ignore:
+      - python  # default branch — production auto-deploys via Embr
+
+jobs:
+  ensure-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Embr config
+        id: config
+        run: |
+          echo "project_id=$(jq -r .projectId .embr.json)" >> "$GITHUB_OUTPUT"
+          BRANCH="${GITHUB_REF_NAME}"
+          ENV_NAME=$(echo "$BRANCH" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
+          echo "env_name=${ENV_NAME}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Embr CLI
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> ~/.npmrc
+          echo "@coreai-microsoft:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          npm install -g @coreai-microsoft/embr-cli
+          echo "✅ Embr CLI $(embr --version)"
+
+      - name: Authenticate
+        run: embr auth login --token "${{ secrets.EMBR_TOKEN }}"
+
+      - name: Ensure branch environment exists
+        run: |
+          embr environments create \
+            -p ${{ steps.config.outputs.project_id }} \
+            -n "${{ steps.config.outputs.env_name }}" \
+            -b "${{ steps.config.outputs.branch }}" \
+            --json || true
+          # create is idempotent — if env already exists this is a no-op
+          # Embr auto-deploy triggers the actual deployment on push
+          echo "✅ Environment '${{ steps.config.outputs.env_name }}' ready for branch '${{ steps.config.outputs.branch }}'"

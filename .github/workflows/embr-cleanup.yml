@@ -1,0 +1,46 @@
+name: Embr Branch Cleanup
+
+on:
+  delete:
+
+jobs:
+  cleanup:
+    if: github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Embr config
+        id: config
+        run: |
+          BRANCH="${{ github.event.ref }}"
+          ENV_NAME=$(echo "$BRANCH" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
+          echo "project_id=$(jq -r .projectId .embr.json)" >> "$GITHUB_OUTPUT"
+          echo "env_name=${ENV_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Embr CLI
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> ~/.npmrc
+          echo "@coreai-microsoft:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          npm install -g @coreai-microsoft/embr-cli
+          echo "✅ Embr CLI $(embr --version)"
+
+      - name: Authenticate
+        run: embr auth login --token "${{ secrets.EMBR_TOKEN }}"
+
+      - name: Find and delete branch environment
+        run: |
+          ENV_NAME="${{ steps.config.outputs.env_name }}"
+          PROJECT_ID="${{ steps.config.outputs.project_id }}"
+
+          ENV_ID=$(embr environments list -p "$PROJECT_ID" --json | \
+            jq -r --arg name "$ENV_NAME" '.items[] | select(.name == $name) | .id')
+
+          if [ -n "$ENV_ID" ] && [ "$ENV_ID" != "null" ]; then
+            embr environments delete -p "$PROJECT_ID" -e "$ENV_ID" -f
+            echo "✅ Deleted environment '$ENV_NAME' ($ENV_ID)"
+          else
+            echo "ℹ️ Environment '$ENV_NAME' not found — nothing to clean up"
+          fi
